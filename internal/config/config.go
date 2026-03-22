@@ -21,6 +21,11 @@ type Config struct {
 	BestValueWeightPrice    float64 `envconfig:"BEST_VALUE_WEIGHT_PRICE" default:"0.50"`
 	BestValueWeightDuration float64 `envconfig:"BEST_VALUE_WEIGHT_DURATION" default:"0.30"`
 	BestValueWeightStops    float64 `envconfig:"BEST_VALUE_WEIGHT_STOPS" default:"0.20"`
+
+	// Per-provider cache TTL. Successful provider responses are cached for this duration.
+	// Set to 0 to disable caching.
+	CacheTTLSeconds     int `envconfig:"CACHE_TTL_SECONDS" default:"300"`
+	CacheCleanupSeconds int `envconfig:"CACHE_CLEANUP_SECONDS" default:"300"`
 }
 
 func Load() Config {

@@ -13,6 +13,7 @@ A flight search and aggregation service written in Go that fetches and normalize
 - **IDR currency formatting**: Locale-aware display (e.g. `Rp1.500.000`) via `golang.org/x/text/currency`
 - **Timezone display**: Human-readable timezone labels (`WIB`, `WITA`, `WIT`) on every departure/arrival point
 - **Flight validation**: Rejects flights where arrival is not after departure
+- **Per-provider caching**: In-process cache (`go-cache`) keyed per provider + search request; errors never cached so unreliable providers always retry fresh; TTL configurable via env vars
 - **Retry with exponential backoff**: Transient provider failures retried automatically; configurable attempts and base delay via env vars
 - **Mock providers**: Embedded JSON data with realistic delays and AirAsia 10% failure simulation
 - **Structured logging**: `log/slog` with JSON output; trace ID injected into every log line
@@ -60,6 +61,8 @@ Defined in `.env` (copy from `.env.example`). All variables are optional — def
 | `BEST_VALUE_WEIGHT_PRICE` | `0.50` | Price factor weight for best-value scoring |
 | `BEST_VALUE_WEIGHT_DURATION` | `0.30` | Duration factor weight for best-value scoring |
 | `BEST_VALUE_WEIGHT_STOPS` | `0.20` | Stops factor weight for best-value scoring |
+| `CACHE_TTL_SECONDS` | `300` | How long a successful provider response is cached (0 = cache never expires until cleanup) |
+| `CACHE_CLEANUP_SECONDS` | `300` | How often expired cache entries are purged from memory |
 
 > Weights are automatically normalised to sum to 1, so you can supply any positive combination (e.g. `5 3 2` is equivalent to `0.5 0.3 0.2`).
 
@@ -227,6 +230,7 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
 │   ├── repository/
 │   │   └── flight/                          # Flight data access layer
 │   │       ├── repository.go                # Repository interface
+│   │       ├── cached/                      # Standalone per-provider cache store (go-cache)
 │   │       ├── garuda/                      # Garuda Indonesia (50-100ms delay)
 │   │       ├── lionair/                     # Lion Air (100-200ms delay)
 │   │       ├── batikair/                    # Batik Air (200-400ms delay)
@@ -368,3 +372,21 @@ attempt 3 → baseDelay×2 × [0.75, 1.25)
 - **Context-aware** — the select on `ctx.Done()` stops retrying immediately when the shared timeout fires; no goroutine lingers beyond the deadline.
 - **`RETRY_MAX_ATTEMPTS=1` disables retries** — zero-overhead path when retries are not desired; `Retry` returns the original repo unchanged in this case.
 - **Configurable via env vars** (`RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY_MS`) so operators can tune aggressiveness without a code change — useful when switching from mock providers to real HTTP backends with different failure characteristics.
+
+### 11. Per-provider caching (`repository/flight/cached`)
+
+Each provider's successful responses are cached independently in `cached.Store` — a thin wrapper around `go-cache` that lives in its own package and knows nothing about how flights are fetched.
+
+**Why per-provider, not aggregated:**
+
+AirAsia has a 10% simulated failure rate. If the cache held aggregated results, a response with AirAsia missing would be served for the full TTL — every cache hit would silently under-report capacity. Per-provider caching means only successful responses are stored; a failed provider always retries on the next request regardless of whether the other three are cached.
+
+**Separation of concerns — standalone `Store`, not a decorator:**
+
+The cache is not a `Repository` wrapper (decorator pattern). Instead, `cached.Store` exposes `Get(providerName, req)` and `Set(providerName, req, flights)` and is passed as a dependency to the usecase. The repository layer stays focused on fetching; the orchestration layer decides when to read/write the cache. This keeps the two concerns independently changeable and independently testable.
+
+**Cache key**: `providerName:origin:destination:departureDate:passengers:cabinClass` — all six fields that determine a unique result set. Filters and sort are **not** part of the key because they are applied post-fetch; a cached raw result can serve many different filter/sort combinations without a cache miss.
+
+**Errors are never cached** — if a provider call fails (including after all retry attempts), nothing is written to the store. The next request will retry the provider fresh.
+
+**TTL** is configurable via `CACHE_TTL_SECONDS` (default 5 min). `CACHE_CLEANUP_SECONDS` controls how often go-cache sweeps expired entries from memory (default 5 min).

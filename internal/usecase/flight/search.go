@@ -7,6 +7,7 @@ import (
 
 	"github.com/i-pul/search-flight/internal/domain"
 	flightrepo "github.com/i-pul/search-flight/internal/repository/flight"
+	"github.com/i-pul/search-flight/internal/repository/flight/cached"
 	"github.com/i-pul/search-flight/internal/util"
 	"golang.org/x/sync/errgroup"
 )
@@ -17,6 +18,7 @@ type FlightUsecase interface {
 
 type FlightSearchUsecase struct {
 	repos   []flightrepo.Repository
+	cache   *cached.Store // nil disables caching
 	weights ScoreWeights
 	timeout time.Duration
 	retry   RetryConfig
@@ -28,21 +30,24 @@ type RetryConfig struct {
 	BaseDelay   time.Duration
 }
 
-func New(repos []flightrepo.Repository, weights ScoreWeights, timeout time.Duration, retry RetryConfig) *FlightSearchUsecase {
-	return &FlightSearchUsecase{repos: repos, weights: weights, timeout: timeout, retry: retry}
+func New(repos []flightrepo.Repository, cache *cached.Store, weights ScoreWeights, timeout time.Duration, retry RetryConfig) *FlightSearchUsecase {
+	return &FlightSearchUsecase{repos: repos, cache: cache, weights: weights, timeout: timeout, retry: retry}
 }
 
 type legResult struct {
-	flights []domain.Flight
-	failed  int
+	flights  []domain.Flight
+	failed   int
+	cacheHit bool // true if at least one provider result came from cache
 }
 
 // queryProviders queries all repositories concurrently and returns the aggregated flights
-// and the count of failed providers.
+// and the count of failed providers. When a cache store is configured it is checked per
+// provider before issuing a real query, and successful responses are stored back.
 func (u *FlightSearchUsecase) queryProviders(ctx context.Context, req domain.SearchRequest) legResult {
 	type repoResult struct {
-		flights []domain.Flight
-		err     error
+		flights   []domain.Flight
+		err       error
+		fromCache bool
 	}
 
 	results := make([]repoResult, len(u.repos))
@@ -50,9 +55,21 @@ func (u *FlightSearchUsecase) queryProviders(ctx context.Context, req domain.Sea
 	for i, r := range u.repos {
 		i, r := i, r
 		eg.Go(func() error {
+			// Check cache before hitting the provider.
+			if u.cache != nil {
+				if flights, ok := u.cache.Get(r.Name(), req); ok {
+					slog.InfoContext(egCtx, "cache hit", "provider", r.Name())
+					results[i] = repoResult{flights: flights, fromCache: true}
+					return nil
+				}
+			}
+
 			flights, err := util.Retry(egCtx, u.retry.MaxAttempts, u.retry.BaseDelay, func() ([]domain.Flight, error) {
 				return r.Search(egCtx, req)
 			})
+			if err == nil && u.cache != nil {
+				u.cache.Set(r.Name(), req, flights)
+			}
 			results[i] = repoResult{flights: flights, err: err}
 			return nil
 		})
@@ -61,7 +78,11 @@ func (u *FlightSearchUsecase) queryProviders(ctx context.Context, req domain.Sea
 
 	var all []domain.Flight
 	failed := 0
+	cacheHit := false
 	for i, res := range results {
+		if res.fromCache {
+			cacheHit = true
+		}
 		if res.err != nil {
 			slog.WarnContext(ctx, "provider failed",
 				"provider", u.repos[i].Name(),
@@ -76,7 +97,7 @@ func (u *FlightSearchUsecase) queryProviders(ctx context.Context, req domain.Sea
 		)
 		all = append(all, res.flights...)
 	}
-	return legResult{flights: all, failed: failed}
+	return legResult{flights: all, failed: failed, cacheHit: cacheHit}
 }
 
 func (u *FlightSearchUsecase) Search(
@@ -142,7 +163,7 @@ func (u *FlightSearchUsecase) Search(
 			ProvidersSucceeded: succeeded,
 			ProvidersFailed:    outbound.failed,
 			SearchTimeMs:       time.Since(start).Milliseconds(),
-			CacheHit:           false,
+			CacheHit:           outbound.cacheHit || ret.cacheHit,
 		},
 		Flights: outbound.flights,
 	}
