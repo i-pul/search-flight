@@ -22,7 +22,7 @@ A flight search and aggregation service written in Go that fetches and normalize
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.25+
 
 ## Setup
 
