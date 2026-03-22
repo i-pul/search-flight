@@ -7,6 +7,7 @@ import (
 
 	"github.com/i-pul/search-flight/internal/domain"
 	flightrepo "github.com/i-pul/search-flight/internal/repository/flight"
+	"github.com/i-pul/search-flight/internal/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -18,10 +19,17 @@ type FlightSearchUsecase struct {
 	repos   []flightrepo.Repository
 	weights ScoreWeights
 	timeout time.Duration
+	retry   RetryConfig
 }
 
-func New(repos []flightrepo.Repository, weights ScoreWeights, timeout time.Duration) *FlightSearchUsecase {
-	return &FlightSearchUsecase{repos: repos, weights: weights, timeout: timeout}
+// RetryConfig controls per-provider retry behaviour inside the usecase.
+type RetryConfig struct {
+	MaxAttempts int
+	BaseDelay   time.Duration
+}
+
+func New(repos []flightrepo.Repository, weights ScoreWeights, timeout time.Duration, retry RetryConfig) *FlightSearchUsecase {
+	return &FlightSearchUsecase{repos: repos, weights: weights, timeout: timeout, retry: retry}
 }
 
 type legResult struct {
@@ -42,7 +50,9 @@ func (u *FlightSearchUsecase) queryProviders(ctx context.Context, req domain.Sea
 	for i, r := range u.repos {
 		i, r := i, r
 		eg.Go(func() error {
-			flights, err := r.Search(egCtx, req)
+			flights, err := util.Retry(egCtx, u.retry.MaxAttempts, u.retry.BaseDelay, func() ([]domain.Flight, error) {
+				return r.Search(egCtx, req)
+			})
 			results[i] = repoResult{flights: flights, err: err}
 			return nil
 		})

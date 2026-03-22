@@ -38,7 +38,13 @@ func main() {
 		Price:    cfg.BestValueWeightPrice,
 		Duration: cfg.BestValueWeightDuration,
 		Stops:    cfg.BestValueWeightStops,
-	}, time.Duration(cfg.ProviderTimeoutMs)*time.Millisecond)
+	},
+		time.Duration(cfg.ProviderTimeoutMs)*time.Millisecond,
+		flightuc.RetryConfig{
+			MaxAttempts: cfg.RetryMaxAttempts,
+			BaseDelay:   time.Duration(cfg.RetryBaseDelayMs) * time.Millisecond,
+		},
+	)
 	h := flighth.New(uc)
 
 	r := router.New()

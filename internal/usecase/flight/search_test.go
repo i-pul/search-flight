@@ -72,7 +72,7 @@ func TestFlightSearchUsecase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			uc := New(allRepos(), DefaultScoreWeights(), 5*time.Second)
+			uc := New(allRepos(), DefaultScoreWeights(), 5*time.Second, RetryConfig{})
 			resp, err := uc.Search(context.Background(), baseReq, tc.filter, tc.sort)
 			require.NoError(t, err)
 			tc.check(t, resp)
@@ -94,7 +94,7 @@ func TestFlightSearchUsecase_Timeout(t *testing.T) {
 		garuda.New(),
 		&slowRepo{}, // never responds — gets killed by timeout
 	}
-	uc := New(repos, DefaultScoreWeights(), 600*time.Millisecond)
+	uc := New(repos, DefaultScoreWeights(), 600*time.Millisecond, RetryConfig{})
 
 	resp, err := uc.Search(context.Background(), baseReq, domain.FilterParams{}, domain.SortParams{})
 	require.NoError(t, err) // timeout is non-fatal; we get partial results
@@ -114,7 +114,7 @@ func TestFlightSearchUsecase_RoundTrip(t *testing.T) {
 		CabinClass:    "economy",
 	}
 
-	uc := New(allRepos(), DefaultScoreWeights(), 5*time.Second)
+	uc := New(allRepos(), DefaultScoreWeights(), 5*time.Second, RetryConfig{})
 	resp, err := uc.Search(context.Background(), req, domain.FilterParams{}, domain.SortParams{By: domain.SortByPriceAsc})
 	require.NoError(t, err)
 
@@ -131,7 +131,7 @@ func TestFlightSearchUsecase_RoundTrip(t *testing.T) {
 	assert.GreaterOrEqual(t, resp.Metadata.ReturnResults, 0)
 
 	// One-way search must NOT include return_results in metadata
-	uc2 := New(allRepos(), DefaultScoreWeights(), 5*time.Second)
+	uc2 := New(allRepos(), DefaultScoreWeights(), 5*time.Second, RetryConfig{})
 	oneWay, err := uc2.Search(context.Background(), baseReq, domain.FilterParams{}, domain.SortParams{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, oneWay.Metadata.ReturnResults)

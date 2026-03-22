@@ -13,6 +13,10 @@ type Config struct {
 	// Maximum time in milliseconds to wait for all provider responses.
 	ProviderTimeoutMs int `envconfig:"PROVIDER_TIMEOUT_MS" default:"2000"`
 
+	// Retry configuration for failed provider calls.
+	RetryMaxAttempts int `envconfig:"RETRY_MAX_ATTEMPTS" default:"3"`
+	RetryBaseDelayMs int `envconfig:"RETRY_BASE_DELAY_MS" default:"100"`
+
 	// Best-value scoring weights (must be positive; automatically normalised to sum to 1).
 	BestValueWeightPrice    float64 `envconfig:"BEST_VALUE_WEIGHT_PRICE" default:"0.50"`
 	BestValueWeightDuration float64 `envconfig:"BEST_VALUE_WEIGHT_DURATION" default:"0.30"`

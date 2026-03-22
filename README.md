@@ -13,6 +13,7 @@ A flight search and aggregation service written in Go that fetches and normalize
 - **IDR currency formatting**: Locale-aware display (e.g. `Rp1.500.000`) via `golang.org/x/text/currency`
 - **Timezone display**: Human-readable timezone labels (`WIB`, `WITA`, `WIT`) on every departure/arrival point
 - **Flight validation**: Rejects flights where arrival is not after departure
+- **Retry with exponential backoff**: Transient provider failures retried automatically; configurable attempts and base delay via env vars
 - **Mock providers**: Embedded JSON data with realistic delays and AirAsia 10% failure simulation
 - **Structured logging**: `log/slog` with JSON output; trace ID injected into every log line
 - **Request tracing**: UUID v4 trace ID per request via `X-Trace-Id` header
@@ -54,6 +55,8 @@ Defined in `.env` (copy from `.env.example`). All variables are optional — def
 |---|---|---|
 | `ADDR` | `:8080` | TCP address the server listens on |
 | `PROVIDER_TIMEOUT_MS` | `2000` | Max milliseconds to wait for all provider responses |
+| `RETRY_MAX_ATTEMPTS` | `3` | Max attempts per provider call (set to `1` to disable retries) |
+| `RETRY_BASE_DELAY_MS` | `100` | Base backoff delay in ms; doubles each attempt with ±25% jitter |
 | `BEST_VALUE_WEIGHT_PRICE` | `0.50` | Price factor weight for best-value scoring |
 | `BEST_VALUE_WEIGHT_DURATION` | `0.30` | Duration factor weight for best-value scoring |
 | `BEST_VALUE_WEIGHT_STOPS` | `0.20` | Stops factor weight for best-value scoring |
@@ -232,6 +235,7 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
 │   │   └── mockdata.go
 │   └── util/
 │       ├── timeutil.go                      # Centralized time parsing helpers
+│       ├── retry.go                         # Generic Retry[T] — exponential backoff with jitter
 │       └── currency.go                      # FormatPrice — IDR locale-aware formatting
 ├── .env.example                             # Environment variable template
 └── Makefile
@@ -344,3 +348,23 @@ Both complete in roughly the same wall-clock time as a single one-way search bec
 **Response shape** — the existing `flights` array holds outbound results; a new `return_flights` array holds return results. Both are independently filtered, scored, and sorted with the same criteria. The only difference: departure/arrival time-of-day windows (`departAfter`, `departBefore`, etc.) are stripped from the return leg's filter because those windows were anchored to the *outbound* departure date — applying them literally to the return date would silently exclude valid flights. Price, stops, duration, and airline filters are applied to both legs unchanged.
 
 For one-way searches all new fields (`return_date`, `return_results`, `return_flights`) are omitted from the JSON response, preserving full backward compatibility.
+
+### 10. Retry with exponential backoff (`util/retry.go`)
+> _Bonus: retry logic with exponential backoff for failed providers_
+
+Each provider call inside `queryProviders` is wrapped with `util.Retry` — a generic function that retries any `func() (T, error)`:
+
+```
+attempt 1 → immediate
+attempt 2 → baseDelay × [0.75, 1.25)
+attempt 3 → baseDelay×2 × [0.75, 1.25)
+…
+```
+
+**Design choices:**
+
+- **Generic utility, not a struct wrapper** — `Retry[T any]` takes a function as a parameter, keeping the retry logic decoupled from the `Repository` interface. This makes it reusable for any future callsite (e.g. outbound HTTP calls, cache misses) without structural changes.
+- **±25% jitter** — randomising each delay window prevents multiple providers from retrying in lock-step after a shared transient failure (thundering herd).
+- **Context-aware** — the select on `ctx.Done()` stops retrying immediately when the shared timeout fires; no goroutine lingers beyond the deadline.
+- **`RETRY_MAX_ATTEMPTS=1` disables retries** — zero-overhead path when retries are not desired; `Retry` returns the original repo unchanged in this case.
+- **Configurable via env vars** (`RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY_MS`) so operators can tune aggressiveness without a code change — useful when switching from mock providers to real HTTP backends with different failure characteristics.
