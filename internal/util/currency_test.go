@@ -20,6 +20,9 @@ func TestFormatPrice(t *testing.T) {
 		{100.50, "USD", "US$100,50"}, // Indonesian locale uses comma as decimal separator
 		{999, "IDR", "Rp999"},
 		{-1500000, "IDR", "Rp-1.500.000"},
+		// Unknown / invalid currency codes fall back to "CODE%.2f" format
+		{100, "NOTCUR", "NOTCUR100.00"},
+		{1234.5, "XC", "XC1234.50"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {

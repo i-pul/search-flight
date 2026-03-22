@@ -19,6 +19,10 @@ var defaultReq = domain.SearchRequest{
 	CabinClass:    "economy",
 }
 
+func TestName(t *testing.T) {
+	assert.Equal(t, "LionAir", New().Name())
+}
+
 func TestSearch(t *testing.T) {
 	r := New()
 
@@ -86,6 +90,19 @@ func TestSearch(t *testing.T) {
 		}
 	})
 
+	t.Run("no match returns empty slice", func(t *testing.T) {
+		req := domain.SearchRequest{
+			Origin:        "SUB",
+			Destination:   "JOG",
+			DepartureDate: "2025-12-15",
+			Passengers:    1,
+			CabinClass:    "economy",
+		}
+		flights, err := r.Search(context.Background(), req)
+		require.NoError(t, err)
+		assert.Empty(t, flights)
+	})
+
 	t.Run("context canceled returns error", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 		defer cancel()
@@ -93,5 +110,106 @@ func TestSearch(t *testing.T) {
 
 		_, err := r.Search(ctx, defaultReq)
 		assert.Error(t, err)
+	})
+}
+
+func TestAdapt_Errors(t *testing.T) {
+	t.Run("bad departure time", func(t *testing.T) {
+		f := lionFlight{
+			ID: "JT999",
+			Schedule: lionSchedule{
+				Departure:         "not-a-time",
+				DepartureTimezone: "Asia/Jakarta",
+				Arrival:           "2025-12-15T10:00:00",
+				ArrivalTimezone:   "Asia/Makassar",
+			},
+		}
+		_, err := adapt(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parse departure")
+	})
+
+	t.Run("bad arrival time", func(t *testing.T) {
+		f := lionFlight{
+			ID: "JT999",
+			Schedule: lionSchedule{
+				Departure:         "2025-12-15T06:00:00",
+				DepartureTimezone: "Asia/Jakarta",
+				Arrival:           "not-a-time",
+				ArrivalTimezone:   "Asia/Makassar",
+			},
+		}
+		_, err := adapt(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parse arrival")
+	})
+
+	t.Run("arrival not after departure", func(t *testing.T) {
+		f := lionFlight{
+			ID: "JT999",
+			Schedule: lionSchedule{
+				Departure:         "2025-12-15T08:00:00",
+				DepartureTimezone: "Asia/Jakarta",
+				Arrival:           "2025-12-15T06:00:00",
+				ArrivalTimezone:   "Asia/Jakarta",
+			},
+		}
+		_, err := adapt(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "arrival not after departure")
+	})
+
+	t.Run("IsDirect sets stops to 0", func(t *testing.T) {
+		f := lionFlight{
+			ID: "JT999",
+			Schedule: lionSchedule{
+				Departure:         "2025-12-15T06:00:00",
+				DepartureTimezone: "Asia/Jakarta",
+				Arrival:           "2025-12-15T08:00:00",
+				ArrivalTimezone:   "Asia/Makassar",
+			},
+			IsDirect:  true,
+			StopCount: 3,
+		}
+		flight, err := adapt(f)
+		require.NoError(t, err)
+		assert.Equal(t, 0, flight.Stops)
+	})
+
+	t.Run("WiFi and meals included in amenities", func(t *testing.T) {
+		f := lionFlight{
+			ID: "JT999",
+			Schedule: lionSchedule{
+				Departure:         "2025-12-15T06:00:00",
+				DepartureTimezone: "Asia/Jakarta",
+				Arrival:           "2025-12-15T08:00:00",
+				ArrivalTimezone:   "Asia/Makassar",
+			},
+			IsDirect: true,
+			Services: lionServices{
+				WiFiAvailable: true,
+				MealsIncluded: true,
+			},
+		}
+		flight, err := adapt(f)
+		require.NoError(t, err)
+		assert.Contains(t, flight.Amenities, "wifi")
+		assert.Contains(t, flight.Amenities, "meal")
+	})
+
+	t.Run("no WiFi no meals results in empty amenities", func(t *testing.T) {
+		f := lionFlight{
+			ID: "JT999",
+			Schedule: lionSchedule{
+				Departure:         "2025-12-15T06:00:00",
+				DepartureTimezone: "Asia/Jakarta",
+				Arrival:           "2025-12-15T08:00:00",
+				ArrivalTimezone:   "Asia/Makassar",
+			},
+			IsDirect: true,
+		}
+		flight, err := adapt(f)
+		require.NoError(t, err)
+		assert.Empty(t, flight.Amenities)
 	})
 }

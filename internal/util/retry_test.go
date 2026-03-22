@@ -109,3 +109,38 @@ func TestRetry_AlreadyCancelledContext(t *testing.T) {
 	// First attempt still runs; then the wait detects ctx.Done or ctx.Err check fires.
 	assert.Error(t, err)
 }
+
+func TestRetry_ContextCancelledDuringBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	calls := 0
+	// Use a long backoff so the ctx.Done() select case fires before the timer.
+	_, err := Retry(ctx, 3, 500*time.Millisecond, func() (string, error) {
+		calls++
+		cancel() // cancel immediately after first fn() call
+		return "", errTransient
+	})
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls, "should stop after first attempt once context is cancelled during backoff")
+}
+
+func TestRetry_ContextCancelledDuringBackoffWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	calls := 0
+	_, err := Retry(ctx, 3, 200*time.Millisecond, func() (string, error) {
+		calls++
+		if calls == 1 {
+			// Schedule cancellation to fire during the backoff sleep, not during fn()
+			go func() {
+				time.Sleep(30 * time.Millisecond)
+				cancel()
+			}()
+		}
+		return "", errTransient
+	})
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls, "should not retry after context is cancelled during the backoff wait")
+}

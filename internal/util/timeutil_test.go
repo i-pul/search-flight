@@ -215,6 +215,11 @@ func TestTimezoneAbbr(t *testing.T) {
 			input: mustParse("2025-12-15T12:00:00+05:30"),
 			want:  "+05:30",
 		},
+		{
+			name:  "negative offset fallback (-05:00)",
+			input: mustParse("2025-12-15T10:00:00-05:00"),
+			want:  "-05:00",
+		},
 	}
 
 	for _, tc := range tests {
