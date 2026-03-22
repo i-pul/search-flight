@@ -108,8 +108,9 @@ func adapt(f batikFlight) (domain.Flight, error) {
 		},
 		Stops: f.NumberOfStops,
 		Price: domain.Price{
-			Amount:   f.Fare.TotalPrice,
-			Currency: f.Fare.CurrencyCode,
+			Amount:    f.Fare.TotalPrice,
+			Currency:  f.Fare.CurrencyCode,
+			Formatted: util.FormatPrice(f.Fare.TotalPrice, f.Fare.CurrencyCode),
 		},
 		AvailableSeats: f.SeatsAvailable,
 		CabinClass:     "economy", // class "Y" = economy

@@ -115,8 +115,9 @@ func adapt(f lionFlight) (domain.Flight, error) {
 		},
 		Stops: stops,
 		Price: domain.Price{
-			Amount:   f.Pricing.Total,
-			Currency: f.Pricing.Currency,
+			Amount:    f.Pricing.Total,
+			Currency:  f.Pricing.Currency,
+			Formatted: util.FormatPrice(f.Pricing.Total, f.Pricing.Currency),
 		},
 		AvailableSeats: f.SeatsLeft,
 		CabinClass:     strings.ToLower(f.Pricing.FareType),
