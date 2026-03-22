@@ -114,7 +114,9 @@ func (u *FlightSearchUsecase) Search(
 
 	// Apply filters, scoring, sort to outbound flights.
 	outbound.flights = ApplyFilters(outbound.flights, fp)
-	ComputeBestValueScores(outbound.flights, u.weights)
+	if sp.By == domain.SortByBestValue {
+		ComputeBestValueScores(outbound.flights, u.weights)
+	}
 	ApplySort(outbound.flights, sp)
 
 	// Apply filters, scoring, sort to return flights.
@@ -123,7 +125,9 @@ func (u *FlightSearchUsecase) Search(
 	if req.ReturnDate != nil {
 		returnFP := stripTimeFilters(fp)
 		ret.flights = ApplyFilters(ret.flights, returnFP)
-		ComputeBestValueScores(ret.flights, u.weights)
+		if sp.By == domain.SortByBestValue {
+			ComputeBestValueScores(ret.flights, u.weights)
+		}
 		ApplySort(ret.flights, sp)
 		returnFlights = ret.flights
 	}
