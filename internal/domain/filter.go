@@ -23,6 +23,7 @@ const (
 	SortByDurationDesc  SortBy = "duration_desc"
 	SortByDepartureTime SortBy = "departure_time"
 	SortByArrivalTime   SortBy = "arrival_time"
+	SortByBestValue     SortBy = "best_value"
 )
 
 type SortParams struct {

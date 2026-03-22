@@ -33,7 +33,11 @@ func main() {
 		airasia.New(),
 	}
 
-	uc := flightuc.New(repos)
+	uc := flightuc.New(repos, flightuc.ScoreWeights{
+		Price:    cfg.BestValueWeightPrice,
+		Duration: cfg.BestValueWeightDuration,
+		Stops:    cfg.BestValueWeightStops,
+	})
 	h := flighth.New(uc)
 
 	r := router.New()

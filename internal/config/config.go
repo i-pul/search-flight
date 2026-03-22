@@ -9,6 +9,11 @@ import (
 
 type Config struct {
 	Addr string `envconfig:"ADDR" default:":8080"`
+
+	// Best-value scoring weights (must be positive; automatically normalised to sum to 1).
+	BestValueWeightPrice    float64 `envconfig:"BEST_VALUE_WEIGHT_PRICE" default:"0.50"`
+	BestValueWeightDuration float64 `envconfig:"BEST_VALUE_WEIGHT_DURATION" default:"0.30"`
+	BestValueWeightStops    float64 `envconfig:"BEST_VALUE_WEIGHT_STOPS" default:"0.20"`
 }
 
 func Load() Config {

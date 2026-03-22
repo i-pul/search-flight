@@ -17,6 +17,7 @@ type Flight struct {
 	Aircraft       *string     `json:"aircraft"`
 	Amenities      []string    `json:"amenities"`
 	Baggage        Baggage     `json:"baggage"`
+	BestValueScore float64     `json:"best_value_score"` // 0–100, higher = better value
 }
 
 type Airline struct {

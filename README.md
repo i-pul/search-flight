@@ -8,6 +8,8 @@ A flight search and aggregation service written in Go that fetches and normalize
 - **Parallel queries**: All providers queried concurrently via `errgroup`
 - **Data normalization**: Handles 4 different response formats and time representations
 - **Search, filter & sort**: Price range, stops, time windows, airlines, duration
+- **Best value scoring**: Weighted score (0–100) combining price, duration, and stops; configurable via env vars
+- **IDR currency formatting**: Locale-aware display (e.g. `Rp1.500.000`) via `golang.org/x/text/currency`
 - **Flight validation**: Rejects flights where arrival is not after departure
 - **Mock providers**: Embedded JSON data with realistic delays and AirAsia 10% failure simulation
 - **Structured logging**: `log/slog` with JSON output; trace ID injected into every log line
@@ -49,6 +51,11 @@ Defined in `.env` (copy from `.env.example`). All variables are optional — def
 | Variable | Default | Description |
 |---|---|---|
 | `ADDR` | `:8080` | TCP address the server listens on |
+| `BEST_VALUE_WEIGHT_PRICE` | `0.50` | Price factor weight for best-value scoring |
+| `BEST_VALUE_WEIGHT_DURATION` | `0.30` | Duration factor weight for best-value scoring |
+| `BEST_VALUE_WEIGHT_STOPS` | `0.20` | Stops factor weight for best-value scoring |
+
+> Weights are automatically normalised to sum to 1, so you can supply any positive combination (e.g. `5 3 2` is equivalent to `0.5 0.3 0.2`).
 
 ## API
 
@@ -110,7 +117,7 @@ Search for available flights across all providers.
 | `arriveAfter` | string | `"08:00"` | Earliest arrival time (HH:MM, WIB) |
 | `arriveBefore` | string | `"22:00"` | Latest arrival time (HH:MM, WIB) |
 
-**`sort.by` options**: `price_asc` (default), `price_desc`, `duration_asc`, `duration_desc`, `departure_time`, `arrival_time`
+**`sort.by` options**: `price_asc` (default), `price_desc`, `duration_asc`, `duration_desc`, `departure_time`, `arrival_time`, `best_value`
 
 **Response headers:**
 
@@ -181,11 +188,12 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
       },
       "duration": { "total_minutes": 260, "formatted": "4h 20m" },
       "stops": 1,
-      "price": { "amount": 485000, "currency": "IDR" },
+      "price": { "amount": 485000, "currency": "IDR", "formatted": "Rp485.000" },
       "available_seats": 88,
       "cabin_class": "economy",
       "amenities": [],
-      "baggage": { "carry_on": "7 kg", "checked": "Additional fee" }
+      "baggage": { "carry_on": "7 kg", "checked": "Additional fee" },
+      "best_value_score": 74.5
     }
   ]
 }
@@ -228,7 +236,10 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
 │   │   └── flight/                          # Flight search business logic
 │   │       ├── search.go                    # FlightUsecase interface + parallel fan-out orchestration
 │   │       ├── search_test.go               # Usecase integration tests
-│   │       └── filter.go                    # ApplyFilters, ApplySort
+│   │       ├── filter.go                    # ApplyFilters, ApplySort
+│   │       ├── filter_test.go
+│   │       ├── score.go                     # ComputeBestValueScores, ScoreWeights
+│   │       └── score_test.go
 │   ├── repository/
 │   │   └── flight/                          # Flight data access layer
 │   │       ├── repository.go                # Repository interface
@@ -239,7 +250,8 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
 │   ├── mockdata/                            # Embedded mock JSON files (compile-time)
 │   │   └── mockdata.go
 │   └── util/
-│       └── timeutil.go                      # Centralized time parsing helpers
+│       ├── timeutil.go                      # Centralized time parsing helpers
+│       └── currency.go                      # FormatPrice — IDR locale-aware formatting
 ├── .env.example                             # Environment variable template
 └── Makefile
 ```
@@ -284,3 +296,37 @@ All repositories are queried concurrently. A `results[i]` slice is pre-allocated
 > _Technical: production-ready code · API performance (request tracing and diagnostics)_
 
 Every request is assigned a UUID v4 trace ID by `middleware.Trace`. The ID is echoed in the `X-Trace-Id` response header and injected into every `slog` record for that request via `slogx.ContextHandler` — a thin wrapper around `slog.Handler` that reads the trace ID from `context.Value` before delegating to the underlying JSON handler.
+
+### 6. IDR currency formatting (`util/currency.go`)
+> _Bonus: currency display (IDR formatting with thousands separator)_
+
+The `Price` domain model carries both a raw `amount float64` and a `formatted string` field populated at the repository adapter level (so every provider's flight already has it by the time it reaches the handler). Formatting is handled by `util.FormatPrice`, which:
+
+1. Validates the ISO 4217 currency code via `golang.org/x/text/currency.ParseISO` — unknown codes fall back gracefully to `"CODE amount"` rather than panicking.
+2. Extracts the locale-correct symbol (`"Rp"` for IDR, `"US$"` for USD, etc.) using the Indonesian locale printer with `currency.Symbol` — this delegates to CLDR data, keeping symbols accurate without a hardcoded table.
+3. Formats the number independently with `message.NewPrinter(language.Indonesian).Sprintf`, which applies Indonesian thousands separators (`.`) and decimal separator (`,`) regardless of CLDR's currency precision rules. This decoupling is intentional: CLDR marks IDR as having 0 decimal places, so `currency.IDR.Amount(850000.53)` would silently round — by formatting the number separately we preserve whatever precision the provider supplies.
+
+### 7. Best value scoring algorithm (`usecase/flight/score.go`)
+> _Bonus: "best value" scoring algorithm (price + convenience)_
+
+Scores are computed **after filtering** on the final candidate set. Computing before filtering would mean a flight's score reflects competition from options the user has already excluded — post-filter scores are relative to what the user actually sees.
+
+**Algorithm** — weighted linear penalty model:
+
+```
+normFactor = (value - min) / (max - min)   // 0 = best, 1 = worst in set
+penalty    = normPrice × wPrice + normDuration × wDuration + normStops × wStops
+score      = round((1 - penalty) × 100, 1)  // 0–100, higher = better
+```
+
+**Default weights**: price 50%, duration 30%, stops 20%.
+
+| Factor | Weight | Rationale |
+|--------|--------|-----------|
+| Price | 50% | Primary decision driver for most travelers; the main reason to use an aggregator |
+| Duration | 30% | Holistic convenience signal — implicitly captures stop overhead since layover flights are almost always longer |
+| Stops | 20% | Separate penalty for boarding/deboarding friction and missed-connection risk, not fully captured by duration |
+
+**Configurability** — weights are read from env vars (`BEST_VALUE_WEIGHT_PRICE`, `BEST_VALUE_WEIGHT_DURATION`, `BEST_VALUE_WEIGHT_STOPS`) and automatically normalised to sum to 1 at startup. Any positive combination is valid: `{5, 3, 2}` produces identical results to `{0.5, 0.3, 0.2}`. All-zero weights fall back to defaults rather than dividing by zero. This lets operators tune the scoring for different audiences (e.g. business travellers who care more about duration than price) without a code change.
+
+The `best_value` sort option is exposed alongside the existing price/duration/time options — it sorts by `BestValueScore` descending.

@@ -58,6 +58,8 @@ func ApplySort(flights []domain.Flight, p domain.SortParams) {
 			return a.Departure.Timestamp < b.Departure.Timestamp
 		case domain.SortByArrivalTime:
 			return a.Arrival.Timestamp < b.Arrival.Timestamp
+		case domain.SortByBestValue:
+			return a.BestValueScore > b.BestValueScore // higher = better
 		default:
 			return a.Price.Amount < b.Price.Amount
 		}

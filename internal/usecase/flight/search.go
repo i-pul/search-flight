@@ -15,11 +15,12 @@ type FlightUsecase interface {
 }
 
 type FlightSearchUsecase struct {
-	repos []flightrepo.Repository
+	repos   []flightrepo.Repository
+	weights ScoreWeights
 }
 
-func New(repos []flightrepo.Repository) *FlightSearchUsecase {
-	return &FlightSearchUsecase{repos: repos}
+func New(repos []flightrepo.Repository, weights ScoreWeights) *FlightSearchUsecase {
+	return &FlightSearchUsecase{repos: repos, weights: weights}
 }
 
 func (u *FlightSearchUsecase) Search(
@@ -71,6 +72,7 @@ func (u *FlightSearchUsecase) Search(
 	succeeded := len(u.repos) - failed
 
 	allFlights = ApplyFilters(allFlights, fp)
+	ComputeBestValueScores(allFlights, u.weights)
 	ApplySort(allFlights, sp)
 
 	return &domain.SearchResponse{

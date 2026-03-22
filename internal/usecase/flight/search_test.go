@@ -71,7 +71,7 @@ func TestFlightSearchUsecase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			uc := New(allRepos())
+			uc := New(allRepos(), DefaultScoreWeights())
 			resp, err := uc.Search(context.Background(), baseReq, tc.filter, tc.sort)
 			require.NoError(t, err)
 			tc.check(t, resp)
