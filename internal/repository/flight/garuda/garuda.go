@@ -93,12 +93,14 @@ func adapt(f garudaFlight) (domain.Flight, error) {
 			City:      f.Departure.City,
 			Datetime:  deptTime.Format(time.RFC3339),
 			Timestamp: deptTime.Unix(),
+			Timezone:  util.TimezoneAbbr(deptTime),
 		},
 		Arrival: domain.FlightPoint{
 			Airport:   f.Arrival.Airport,
 			City:      f.Arrival.City,
 			Datetime:  arrTime.Format(time.RFC3339),
 			Timestamp: arrTime.Unix(),
+			Timezone:  util.TimezoneAbbr(arrTime),
 		},
 		Duration: domain.Duration{
 			TotalMinutes: f.Duration,

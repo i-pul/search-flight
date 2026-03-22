@@ -30,6 +30,7 @@ type FlightPoint struct {
 	City      string `json:"city"`
 	Datetime  string `json:"datetime"`
 	Timestamp int64  `json:"timestamp"`
+	Timezone  string `json:"timezone"` // e.g. "WIB", "WITA", "WIT"
 }
 
 type Duration struct {

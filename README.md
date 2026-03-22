@@ -10,6 +10,7 @@ A flight search and aggregation service written in Go that fetches and normalize
 - **Search, filter & sort**: Price range, stops, time windows, airlines, duration
 - **Best value scoring**: Weighted score (0–100) combining price, duration, and stops; configurable via env vars
 - **IDR currency formatting**: Locale-aware display (e.g. `Rp1.500.000`) via `golang.org/x/text/currency`
+- **Timezone display**: Human-readable timezone labels (`WIB`, `WITA`, `WIT`) on every departure/arrival point
 - **Flight validation**: Rejects flights where arrival is not after departure
 - **Mock providers**: Embedded JSON data with realistic delays and AirAsia 10% failure simulation
 - **Structured logging**: `log/slog` with JSON output; trace ID injected into every log line
@@ -178,13 +179,15 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
         "airport": "CGK",
         "city": "Jakarta",
         "datetime": "2025-12-15T15:15:00+07:00",
-        "timestamp": 1734249300
+        "timestamp": 1734249300,
+        "timezone": "WIB"
       },
       "arrival": {
         "airport": "DPS",
         "city": "Denpasar",
         "datetime": "2025-12-15T20:35:00+08:00",
-        "timestamp": 1734268500
+        "timestamp": 1734268500,
+        "timezone": "WITA"
       },
       "duration": { "total_minutes": 260, "formatted": "4h 20m" },
       "stops": 1,
@@ -330,3 +333,22 @@ score      = round((1 - penalty) × 100, 1)  // 0–100, higher = better
 **Configurability** — weights are read from env vars (`BEST_VALUE_WEIGHT_PRICE`, `BEST_VALUE_WEIGHT_DURATION`, `BEST_VALUE_WEIGHT_STOPS`) and automatically normalised to sum to 1 at startup. Any positive combination is valid: `{5, 3, 2}` produces identical results to `{0.5, 0.3, 0.2}`. All-zero weights fall back to defaults rather than dividing by zero. This lets operators tune the scoring for different audiences (e.g. business travellers who care more about duration than price) without a code change.
 
 The `best_value` sort option is exposed alongside the existing price/duration/time options — it sorts by `BestValueScore` descending.
+
+### 8. Timezone display (`util/timeutil.go`)
+> _Bonus: timezone conversions (WIB, WITA, WIT)_
+
+Every `FlightPoint` (departure and arrival) carries a `timezone` string field showing the human-readable Indonesian timezone abbreviation:
+
+| Abbreviation | UTC offset | Provinces |
+|---|---|---|
+| `WIB` | +07:00 | Java, Sumatra, West Kalimantan |
+| `WITA` | +08:00 | Bali, Sulawesi, East/South Kalimantan |
+| `WIT` | +09:00 | Maluku, Papua |
+
+**Implementation** — `util.TimezoneAbbr(t time.Time) string` reads the UTC offset in seconds via `t.Zone()` and maps it with a switch. This approach works uniformly across all 4 providers regardless of how their times were parsed:
+
+- Garuda/AirAsia (RFC3339 `+07:00`) — `Zone()` returns offset 25200 → `"WIB"`
+- Lion Air (IANA `Asia/Jakarta`) — `Zone()` also returns offset 25200 → `"WIB"`
+- Batik Air (no-colon `+0700`) — same offset → `"WIB"`
+
+Non-Indonesian offsets (e.g. UTC, `+05:30`) fall back to `±HH:MM` so the field is never empty and the function never panics.

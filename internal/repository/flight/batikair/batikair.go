@@ -95,12 +95,14 @@ func adapt(f batikFlight) (domain.Flight, error) {
 			City:      airportCity(f.Origin),
 			Datetime:  deptTime.Format(time.RFC3339),
 			Timestamp: deptTime.Unix(),
+			Timezone:  util.TimezoneAbbr(deptTime),
 		},
 		Arrival: domain.FlightPoint{
 			Airport:   f.Destination,
 			City:      airportCity(f.Destination),
 			Datetime:  arrTime.Format(time.RFC3339),
 			Timestamp: arrTime.Unix(),
+			Timezone:  util.TimezoneAbbr(arrTime),
 		},
 		Duration: domain.Duration{
 			TotalMinutes: durationMinutes,
