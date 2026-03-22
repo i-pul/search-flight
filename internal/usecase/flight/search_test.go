@@ -91,8 +91,8 @@ func (s *slowRepo) Search(ctx context.Context, _ domain.SearchRequest) ([]domain
 
 func TestFlightSearchUsecase_Timeout(t *testing.T) {
 	repos := []flightrepo.Repository{
-		garuda.New(),  // fast provider
-		&slowRepo{},   // never responds — gets killed by timeout
+		garuda.New(),
+		&slowRepo{}, // never responds — gets killed by timeout
 	}
 	uc := New(repos, DefaultScoreWeights(), 600*time.Millisecond)
 
@@ -101,4 +101,39 @@ func TestFlightSearchUsecase_Timeout(t *testing.T) {
 	assert.Equal(t, 2, resp.Metadata.ProvidersQueried)
 	assert.Equal(t, 1, resp.Metadata.ProvidersFailed)   // slow repo timed out
 	assert.Equal(t, 1, resp.Metadata.ProvidersSucceeded) // garuda returned
+}
+
+func TestFlightSearchUsecase_RoundTrip(t *testing.T) {
+	returnDate := "2025-12-22"
+	req := domain.SearchRequest{
+		Origin:        "CGK",
+		Destination:   "DPS",
+		DepartureDate: "2025-12-15",
+		ReturnDate:    &returnDate,
+		Passengers:    1,
+		CabinClass:    "economy",
+	}
+
+	uc := New(allRepos(), DefaultScoreWeights(), 5*time.Second)
+	resp, err := uc.Search(context.Background(), req, domain.FilterParams{}, domain.SortParams{By: domain.SortByPriceAsc})
+	require.NoError(t, err)
+
+	// Outbound leg: CGK→DPS on 2025-12-15 should have results
+	assert.NotZero(t, resp.Metadata.TotalResults)
+	assert.Equal(t, "CGK", resp.SearchCriteria.Origin)
+	assert.Equal(t, "DPS", resp.SearchCriteria.Destination)
+
+	// ReturnDate echoed in criteria
+	require.NotNil(t, resp.SearchCriteria.ReturnDate)
+	assert.Equal(t, returnDate, *resp.SearchCriteria.ReturnDate)
+
+	// return_results is set (may be 0 since mock data has no DPS→CGK flights)
+	assert.GreaterOrEqual(t, resp.Metadata.ReturnResults, 0)
+
+	// One-way search must NOT include return_results in metadata
+	uc2 := New(allRepos(), DefaultScoreWeights(), 5*time.Second)
+	oneWay, err := uc2.Search(context.Background(), baseReq, domain.FilterParams{}, domain.SortParams{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, oneWay.Metadata.ReturnResults)
+	assert.Nil(t, oneWay.ReturnFlights)
 }

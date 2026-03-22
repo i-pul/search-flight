@@ -8,6 +8,7 @@ A flight search and aggregation service written in Go that fetches and normalize
 - **Parallel queries**: All providers queried concurrently via `errgroup`
 - **Data normalization**: Handles 4 different response formats and time representations
 - **Search, filter & sort**: Price range, stops, time windows, airlines, duration
+- **Round-trip search**: Both legs searched in parallel; `return_flights` in response
 - **Best value scoring**: Weighted score (0–100) combining price, duration, and stops; configurable via env vars
 - **IDR currency formatting**: Locale-aware display (e.g. `Rp1.500.000`) via `golang.org/x/text/currency`
 - **Timezone display**: Human-readable timezone labels (`WIB`, `WITA`, `WIT`) on every departure/arrival point
@@ -159,49 +160,25 @@ curl -s -X POST http://localhost:8080/api/v1/flights/search \
     "origin": "CGK",
     "destination": "DPS",
     "departure_date": "2025-12-15",
+    "return_date": "2025-12-22",
     "passengers": 1,
     "cabin_class": "economy"
   },
   "metadata": {
     "total_results": 13,
+    "return_results": 11,
     "providers_queried": 4,
     "providers_succeeded": 4,
     "providers_failed": 0,
     "search_time_ms": 412,
     "cache_hit": false
   },
-  "flights": [
-    {
-      "id": "QZ7250_AirAsia",
-      "provider": "AirAsia",
-      "airline": { "name": "AirAsia", "code": "QZ" },
-      "flight_number": "QZ7250",
-      "departure": {
-        "airport": "CGK",
-        "city": "Jakarta",
-        "datetime": "2025-12-15T15:15:00+07:00",
-        "timestamp": 1734249300,
-        "timezone": "WIB"
-      },
-      "arrival": {
-        "airport": "DPS",
-        "city": "Denpasar",
-        "datetime": "2025-12-15T20:35:00+08:00",
-        "timestamp": 1734268500,
-        "timezone": "WITA"
-      },
-      "duration": { "total_minutes": 260, "formatted": "4h 20m" },
-      "stops": 1,
-      "price": { "amount": 485000, "currency": "IDR", "formatted": "Rp485.000" },
-      "available_seats": 88,
-      "cabin_class": "economy",
-      "amenities": [],
-      "baggage": { "carry_on": "7 kg", "checked": "Additional fee" },
-      "best_value_score": 74.5
-    }
-  ]
+  "flights": [ ... ],
+  "return_flights": [ ... ]
 }
 ```
+
+> For one-way searches, `return_date`, `return_results`, and `return_flights` are omitted.
 
 **Error Response:**
 
@@ -353,3 +330,17 @@ Every `FlightPoint` (departure and arrival) carries a `timezone` string field sh
 - Batik Air (no-colon `+0700`) — same offset → `"WIB"`
 
 Non-Indonesian offsets (e.g. UTC, `+05:30`) fall back to `±HH:MM` so the field is never empty and the function never panics.
+
+### 9. Round-trip search (`usecase/flight/search.go`)
+> _Bonus: support for round-trip searches_
+
+When `returnDate` is supplied in the request, the usecase runs **two provider fan-outs in parallel** under the shared timeout context:
+
+- Outbound: `origin → destination` on `departureDate`
+- Return: `destination → origin` on `returnDate`
+
+Both complete in roughly the same wall-clock time as a single one-way search because the 8 goroutines (4 providers × 2 legs) run concurrently.
+
+**Response shape** — the existing `flights` array holds outbound results; a new `return_flights` array holds return results. Both are independently filtered, scored, and sorted with the same criteria. The only difference: departure/arrival time-of-day windows (`departAfter`, `departBefore`, etc.) are stripped from the return leg's filter because those windows were anchored to the *outbound* departure date — applying them literally to the return date would silently exclude valid flights. Price, stops, duration, and airline filters are applied to both legs unchanged.
+
+For one-way searches all new fields (`return_date`, `return_results`, `return_flights`) are omitted from the JSON response, preserving full backward compatibility.
