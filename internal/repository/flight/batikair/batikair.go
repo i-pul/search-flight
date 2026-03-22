@@ -95,12 +95,14 @@ func adapt(f batikFlight) (domain.Flight, error) {
 			City:      airportCity(f.Origin),
 			Datetime:  deptTime.Format(time.RFC3339),
 			Timestamp: deptTime.Unix(),
+			Timezone:  util.TimezoneAbbr(deptTime),
 		},
 		Arrival: domain.FlightPoint{
 			Airport:   f.Destination,
 			City:      airportCity(f.Destination),
 			Datetime:  arrTime.Format(time.RFC3339),
 			Timestamp: arrTime.Unix(),
+			Timezone:  util.TimezoneAbbr(arrTime),
 		},
 		Duration: domain.Duration{
 			TotalMinutes: durationMinutes,
@@ -108,8 +110,9 @@ func adapt(f batikFlight) (domain.Flight, error) {
 		},
 		Stops: f.NumberOfStops,
 		Price: domain.Price{
-			Amount:   f.Fare.TotalPrice,
-			Currency: f.Fare.CurrencyCode,
+			Amount:    f.Fare.TotalPrice,
+			Currency:  f.Fare.CurrencyCode,
+			Formatted: util.FormatPrice(f.Fare.TotalPrice, f.Fare.CurrencyCode),
 		},
 		AvailableSeats: f.SeatsAvailable,
 		CabinClass:     "economy", // class "Y" = economy

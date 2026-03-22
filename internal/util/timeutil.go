@@ -58,6 +58,30 @@ func ParseTravelTime(s string) (int, error) {
 	return 0, fmt.Errorf("cannot parse travel time %q", s)
 }
 
+// TimezoneAbbr returns a human-readable timezone abbreviation for Indonesian
+// timezones (WIB, WITA, WIT) derived from the UTC offset of t.
+// Any other offset is formatted as ±HH:MM.
+func TimezoneAbbr(t time.Time) string {
+	_, offsetSec := t.Zone()
+	switch offsetSec {
+	case 7 * 3600:
+		return "WIB"
+	case 8 * 3600:
+		return "WITA"
+	case 9 * 3600:
+		return "WIT"
+	default:
+		sign := "+"
+		if offsetSec < 0 {
+			sign = "-"
+			offsetSec = -offsetSec
+		}
+		h := offsetSec / 3600
+		m := (offsetSec % 3600) / 60
+		return fmt.Sprintf("%s%02d:%02d", sign, h, m)
+	}
+}
+
 // FormatDuration converts total minutes to human-readable string like "1h 45m".
 func FormatDuration(totalMinutes int) string {
 	if totalMinutes <= 0 {

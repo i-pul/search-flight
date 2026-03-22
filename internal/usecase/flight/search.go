@@ -7,6 +7,8 @@ import (
 
 	"github.com/i-pul/search-flight/internal/domain"
 	flightrepo "github.com/i-pul/search-flight/internal/repository/flight"
+	"github.com/i-pul/search-flight/internal/repository/flight/cached"
+	"github.com/i-pul/search-flight/internal/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -15,44 +17,72 @@ type FlightUsecase interface {
 }
 
 type FlightSearchUsecase struct {
-	repos []flightrepo.Repository
+	repos   []flightrepo.Repository
+	cache   *cached.Store // nil disables caching
+	weights ScoreWeights
+	timeout time.Duration
+	retry   RetryConfig
 }
 
-func New(repos []flightrepo.Repository) *FlightSearchUsecase {
-	return &FlightSearchUsecase{repos: repos}
+// RetryConfig controls per-provider retry behaviour inside the usecase.
+type RetryConfig struct {
+	MaxAttempts int
+	BaseDelay   time.Duration
 }
 
-func (u *FlightSearchUsecase) Search(
-	ctx context.Context,
-	req domain.SearchRequest,
-	fp domain.FilterParams,
-	sp domain.SortParams,
-) (*domain.SearchResponse, error) {
-	start := time.Now()
+func New(repos []flightrepo.Repository, cache *cached.Store, weights ScoreWeights, timeout time.Duration, retry RetryConfig) *FlightSearchUsecase {
+	return &FlightSearchUsecase{repos: repos, cache: cache, weights: weights, timeout: timeout, retry: retry}
+}
 
-	slog.InfoContext(ctx, "search start", "request", req)
+type legResult struct {
+	flights  []domain.Flight
+	failed   int
+	cacheHit bool // true if at least one provider result came from cache
+}
 
-	type result struct {
-		flights []domain.Flight
-		err     error
+// queryProviders queries all repositories concurrently and returns the aggregated flights
+// and the count of failed providers. When a cache store is configured it is checked per
+// provider before issuing a real query, and successful responses are stored back.
+func (u *FlightSearchUsecase) queryProviders(ctx context.Context, req domain.SearchRequest) legResult {
+	type repoResult struct {
+		flights   []domain.Flight
+		err       error
+		fromCache bool
 	}
 
-	results := make([]result, len(u.repos))
-
-	eg, ctx := errgroup.WithContext(ctx)
+	results := make([]repoResult, len(u.repos))
+	eg, egCtx := errgroup.WithContext(ctx)
 	for i, r := range u.repos {
 		i, r := i, r
 		eg.Go(func() error {
-			flights, err := r.Search(ctx, req)
-			results[i] = result{flights: flights, err: err}
+			// Check cache before hitting the provider.
+			if u.cache != nil {
+				if flights, ok := u.cache.Get(r.Name(), req); ok {
+					slog.InfoContext(egCtx, "cache hit", "provider", r.Name())
+					results[i] = repoResult{flights: flights, fromCache: true}
+					return nil
+				}
+			}
+
+			flights, err := util.Retry(egCtx, u.retry.MaxAttempts, u.retry.BaseDelay, func() ([]domain.Flight, error) {
+				return r.Search(egCtx, req)
+			})
+			if err == nil && u.cache != nil {
+				u.cache.Set(r.Name(), req, flights)
+			}
+			results[i] = repoResult{flights: flights, err: err}
 			return nil
 		})
 	}
 	_ = eg.Wait()
 
-	var allFlights []domain.Flight
+	var all []domain.Flight
 	failed := 0
+	cacheHit := false
 	for i, res := range results {
+		if res.fromCache {
+			cacheHit = true
+		}
 		if res.err != nil {
 			slog.WarnContext(ctx, "provider failed",
 				"provider", u.repos[i].Name(),
@@ -65,26 +95,96 @@ func (u *FlightSearchUsecase) Search(
 			"provider", u.repos[i].Name(),
 			"flights", len(res.flights),
 		)
-		allFlights = append(allFlights, res.flights...)
+		all = append(all, res.flights...)
+	}
+	return legResult{flights: all, failed: failed, cacheHit: cacheHit}
+}
+
+func (u *FlightSearchUsecase) Search(
+	ctx context.Context,
+	req domain.SearchRequest,
+	fp domain.FilterParams,
+	sp domain.SortParams,
+) (*domain.SearchResponse, error) {
+	start := time.Now()
+
+	slog.InfoContext(ctx, "search start", "request", req)
+
+	tctx, cancel := context.WithTimeout(ctx, u.timeout)
+	defer cancel()
+
+	// Run outbound and return legs concurrently under the shared timeout.
+	var outbound, ret legResult
+
+	if req.ReturnDate != nil {
+		returnReq := domain.SearchRequest{
+			Origin:        req.Destination,
+			Destination:   req.Origin,
+			DepartureDate: *req.ReturnDate,
+			Passengers:    req.Passengers,
+			CabinClass:    req.CabinClass,
+		}
+
+		var eg errgroup.Group
+		eg.Go(func() error { outbound = u.queryProviders(tctx, req); return nil })
+		eg.Go(func() error { ret = u.queryProviders(tctx, returnReq); return nil })
+		_ = eg.Wait()
+	} else {
+		outbound = u.queryProviders(tctx, req)
 	}
 
-	succeeded := len(u.repos) - failed
+	// Apply filters, scoring, sort to outbound flights.
+	outbound.flights = ApplyFilters(outbound.flights, fp)
+	if sp.By == domain.SortByBestValue {
+		ComputeBestValueScores(outbound.flights, u.weights)
+	}
+	ApplySort(outbound.flights, sp)
 
-	allFlights = ApplyFilters(allFlights, fp)
-	ApplySort(allFlights, sp)
+	// Apply filters, scoring, sort to return flights.
+	// Time-of-day filters are stripped because they were anchored to the outbound date.
+	var returnFlights []domain.Flight
+	if req.ReturnDate != nil {
+		returnFP := stripTimeFilters(fp)
+		ret.flights = ApplyFilters(ret.flights, returnFP)
+		if sp.By == domain.SortByBestValue {
+			ComputeBestValueScores(ret.flights, u.weights)
+		}
+		ApplySort(ret.flights, sp)
+		returnFlights = ret.flights
+	}
 
-	return &domain.SearchResponse{
+	succeeded := len(u.repos) - outbound.failed
+
+	resp := &domain.SearchResponse{
 		SearchCriteria: toCriteria(req),
 		Metadata: domain.SearchMetadata{
-			TotalResults:       len(allFlights),
+			TotalResults:       len(outbound.flights),
 			ProvidersQueried:   len(u.repos),
 			ProvidersSucceeded: succeeded,
-			ProvidersFailed:    failed,
+			ProvidersFailed:    outbound.failed,
 			SearchTimeMs:       time.Since(start).Milliseconds(),
-			CacheHit:           false,
+			CacheHit:           outbound.cacheHit || ret.cacheHit,
 		},
-		Flights: allFlights,
-	}, nil
+		Flights: outbound.flights,
+	}
+
+	if req.ReturnDate != nil {
+		resp.Metadata.ReturnResults = len(returnFlights)
+		resp.ReturnFlights = returnFlights
+	}
+
+	return resp, nil
+}
+
+// stripTimeFilters returns a copy of fp with departure/arrival time windows removed.
+// Used for the return leg, whose date differs from the outbound date used to compute
+// the original time windows.
+func stripTimeFilters(fp domain.FilterParams) domain.FilterParams {
+	fp.EarliestDepart = nil
+	fp.LatestDepart = nil
+	fp.EarliestArrive = nil
+	fp.LatestArrive = nil
+	return fp
 }
 
 func toCriteria(req domain.SearchRequest) domain.SearchCriteria {

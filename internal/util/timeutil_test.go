@@ -2,6 +2,7 @@ package util
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -173,4 +174,75 @@ func TestFormatDuration(t *testing.T) {
 			assert.Equal(t, tc.want, FormatDuration(tc.input))
 		})
 	}
+}
+
+func TestTimezoneAbbr(t *testing.T) {
+	mustParse := func(s string) time.Time {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			panic(err)
+		}
+		return t
+	}
+
+	tests := []struct {
+		name  string
+		input time.Time
+		want  string
+	}{
+		{
+			name:  "WIB (+07:00)",
+			input: mustParse("2025-12-15T06:00:00+07:00"),
+			want:  "WIB",
+		},
+		{
+			name:  "WITA (+08:00)",
+			input: mustParse("2025-12-15T08:00:00+08:00"),
+			want:  "WITA",
+		},
+		{
+			name:  "WIT (+09:00)",
+			input: mustParse("2025-12-15T10:00:00+09:00"),
+			want:  "WIT",
+		},
+		{
+			name:  "UTC fallback",
+			input: mustParse("2025-12-15T00:00:00+00:00"),
+			want:  "+00:00",
+		},
+		{
+			name:  "unknown positive offset fallback (+05:30)",
+			input: mustParse("2025-12-15T12:00:00+05:30"),
+			want:  "+05:30",
+		},
+		{
+			name:  "negative offset fallback (-05:00)",
+			input: mustParse("2025-12-15T10:00:00-05:00"),
+			want:  "-05:00",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, TimezoneAbbr(tc.input))
+		})
+	}
+
+	t.Run("IANA Asia/Jakarta returns WIB", func(t *testing.T) {
+		parsed, err := ParseWithIANA("2025-12-15T06:00:00", "Asia/Jakarta")
+		require.NoError(t, err)
+		assert.Equal(t, "WIB", TimezoneAbbr(parsed))
+	})
+
+	t.Run("IANA Asia/Makassar returns WITA", func(t *testing.T) {
+		parsed, err := ParseWithIANA("2025-12-15T08:00:00", "Asia/Makassar")
+		require.NoError(t, err)
+		assert.Equal(t, "WITA", TimezoneAbbr(parsed))
+	})
+
+	t.Run("IANA Asia/Jayapura returns WIT", func(t *testing.T) {
+		parsed, err := ParseWithIANA("2025-12-15T10:00:00", "Asia/Jayapura")
+		require.NoError(t, err)
+		assert.Equal(t, "WIT", TimezoneAbbr(parsed))
+	})
 }

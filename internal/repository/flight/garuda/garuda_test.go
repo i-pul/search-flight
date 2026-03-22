@@ -19,6 +19,10 @@ var defaultReq = domain.SearchRequest{
 	CabinClass:    "economy",
 }
 
+func TestName(t *testing.T) {
+	assert.Equal(t, "GarudaIndonesia", New().Name())
+}
+
 func TestSearch(t *testing.T) {
 	r := New()
 
@@ -76,6 +80,19 @@ func TestSearch(t *testing.T) {
 		t.Skip("GA315 not present")
 	})
 
+	t.Run("no match returns empty slice", func(t *testing.T) {
+		req := domain.SearchRequest{
+			Origin:        "SUB",
+			Destination:   "JOG",
+			DepartureDate: "2025-12-15",
+			Passengers:    1,
+			CabinClass:    "economy",
+		}
+		flights, err := r.Search(context.Background(), req)
+		require.NoError(t, err)
+		assert.Empty(t, flights)
+	})
+
 	t.Run("context canceled returns error", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 		defer cancel()
@@ -83,5 +100,49 @@ func TestSearch(t *testing.T) {
 
 		_, err := r.Search(ctx, defaultReq)
 		assert.Error(t, err)
+	})
+}
+
+func TestAdapt_Errors(t *testing.T) {
+	t.Run("bad departure time", func(t *testing.T) {
+		f := garudaFlight{FlightID: "GA999", Departure: garudaPoint{Time: "not-a-time"}}
+		_, err := adapt(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parse departure")
+	})
+
+	t.Run("bad arrival time", func(t *testing.T) {
+		f := garudaFlight{
+			FlightID:  "GA999",
+			Departure: garudaPoint{Time: "2025-12-15T06:00:00+07:00"},
+			Arrival:   garudaPoint{Time: "not-a-time"},
+		}
+		_, err := adapt(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parse arrival")
+	})
+
+	t.Run("arrival not after departure", func(t *testing.T) {
+		f := garudaFlight{
+			FlightID:  "GA999",
+			Departure: garudaPoint{Time: "2025-12-15T08:00:00+07:00"},
+			Arrival:   garudaPoint{Time: "2025-12-15T06:00:00+07:00"},
+		}
+		_, err := adapt(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "arrival not after departure")
+	})
+
+	t.Run("multi-segment stops from segments length", func(t *testing.T) {
+		f := garudaFlight{
+			FlightID:  "GA999",
+			Departure: garudaPoint{Time: "2025-12-15T06:00:00+07:00"},
+			Arrival:   garudaPoint{Time: "2025-12-15T10:00:00+07:00"},
+			Stops:     0,
+			Segments:  []garudaSegment{{}, {}},
+		}
+		flight, err := adapt(f)
+		require.NoError(t, err)
+		assert.Equal(t, 1, flight.Stops)
 	})
 }

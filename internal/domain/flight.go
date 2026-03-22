@@ -17,6 +17,7 @@ type Flight struct {
 	Aircraft       *string     `json:"aircraft"`
 	Amenities      []string    `json:"amenities"`
 	Baggage        Baggage     `json:"baggage"`
+	BestValueScore float64     `json:"best_value_score"` // 0–100, higher = better value
 }
 
 type Airline struct {
@@ -29,6 +30,7 @@ type FlightPoint struct {
 	City      string `json:"city"`
 	Datetime  string `json:"datetime"`
 	Timestamp int64  `json:"timestamp"`
+	Timezone  string `json:"timezone"` // e.g. "WIB", "WITA", "WIT"
 }
 
 type Duration struct {
@@ -37,8 +39,9 @@ type Duration struct {
 }
 
 type Price struct {
-	Amount   float64 `json:"amount"`
-	Currency string  `json:"currency"`
+	Amount    float64 `json:"amount"`
+	Currency  string  `json:"currency"`
+	Formatted string  `json:"formatted"` // e.g. "Rp 1.500.000"
 }
 
 type Baggage struct {
@@ -87,6 +90,7 @@ type SearchCriteria struct {
 
 type SearchMetadata struct {
 	TotalResults       int   `json:"total_results"`
+	ReturnResults      int   `json:"return_results,omitempty"` // return leg count; omitted for one-way
 	ProvidersQueried   int   `json:"providers_queried"`
 	ProvidersSucceeded int   `json:"providers_succeeded"`
 	ProvidersFailed    int   `json:"providers_failed"`
@@ -98,4 +102,5 @@ type SearchResponse struct {
 	SearchCriteria SearchCriteria `json:"search_criteria"`
 	Metadata       SearchMetadata `json:"metadata"`
 	Flights        []Flight       `json:"flights"`
+	ReturnFlights  []Flight       `json:"return_flights,omitempty"` // populated for round-trip
 }

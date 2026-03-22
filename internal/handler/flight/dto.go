@@ -129,7 +129,8 @@ func toSortParams(s *sortRequest) domain.SortParams {
 	switch domain.SortBy(s.By) {
 	case domain.SortByPriceAsc, domain.SortByPriceDesc,
 		domain.SortByDurationAsc, domain.SortByDurationDesc,
-		domain.SortByDepartureTime, domain.SortByArrivalTime:
+		domain.SortByDepartureTime, domain.SortByArrivalTime,
+		domain.SortByBestValue:
 		return domain.SortParams{By: domain.SortBy(s.By)}
 	default:
 		return domain.SortParams{By: domain.SortByPriceAsc}

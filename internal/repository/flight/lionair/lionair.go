@@ -102,12 +102,14 @@ func adapt(f lionFlight) (domain.Flight, error) {
 			City:      f.Route.From.City,
 			Datetime:  deptTime.Format(time.RFC3339),
 			Timestamp: deptTime.Unix(),
+			Timezone:  util.TimezoneAbbr(deptTime),
 		},
 		Arrival: domain.FlightPoint{
 			Airport:   f.Route.To.Code,
 			City:      f.Route.To.City,
 			Datetime:  arrTime.Format(time.RFC3339),
 			Timestamp: arrTime.Unix(),
+			Timezone:  util.TimezoneAbbr(arrTime),
 		},
 		Duration: domain.Duration{
 			TotalMinutes: f.FlightTime,
@@ -115,8 +117,9 @@ func adapt(f lionFlight) (domain.Flight, error) {
 		},
 		Stops: stops,
 		Price: domain.Price{
-			Amount:   f.Pricing.Total,
-			Currency: f.Pricing.Currency,
+			Amount:    f.Pricing.Total,
+			Currency:  f.Pricing.Currency,
+			Formatted: util.FormatPrice(f.Pricing.Total, f.Pricing.Currency),
 		},
 		AvailableSeats: f.SeatsLeft,
 		CabinClass:     strings.ToLower(f.Pricing.FareType),

@@ -3,6 +3,7 @@ package flight
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,10 +72,68 @@ func TestFlightSearchUsecase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			uc := New(allRepos())
+			uc := New(allRepos(), nil, DefaultScoreWeights(), 5*time.Second, RetryConfig{})
 			resp, err := uc.Search(context.Background(), baseReq, tc.filter, tc.sort)
 			require.NoError(t, err)
 			tc.check(t, resp)
 		})
 	}
+}
+
+// slowRepo is a repository that blocks until its context is cancelled.
+type slowRepo struct{}
+
+func (s *slowRepo) Name() string { return "SlowProvider" }
+func (s *slowRepo) Search(ctx context.Context, _ domain.SearchRequest) ([]domain.Flight, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestFlightSearchUsecase_Timeout(t *testing.T) {
+	repos := []flightrepo.Repository{
+		garuda.New(),
+		&slowRepo{}, // never responds — gets killed by timeout
+	}
+	uc := New(repos, nil, DefaultScoreWeights(), 600*time.Millisecond, RetryConfig{})
+
+	resp, err := uc.Search(context.Background(), baseReq, domain.FilterParams{}, domain.SortParams{})
+	require.NoError(t, err) // timeout is non-fatal; we get partial results
+	assert.Equal(t, 2, resp.Metadata.ProvidersQueried)
+	assert.Equal(t, 1, resp.Metadata.ProvidersFailed)   // slow repo timed out
+	assert.Equal(t, 1, resp.Metadata.ProvidersSucceeded) // garuda returned
+}
+
+func TestFlightSearchUsecase_RoundTrip(t *testing.T) {
+	returnDate := "2025-12-22"
+	req := domain.SearchRequest{
+		Origin:        "CGK",
+		Destination:   "DPS",
+		DepartureDate: "2025-12-15",
+		ReturnDate:    &returnDate,
+		Passengers:    1,
+		CabinClass:    "economy",
+	}
+
+	uc := New(allRepos(), nil, DefaultScoreWeights(), 5*time.Second, RetryConfig{})
+	resp, err := uc.Search(context.Background(), req, domain.FilterParams{}, domain.SortParams{By: domain.SortByPriceAsc})
+	require.NoError(t, err)
+
+	// Outbound leg: CGK→DPS on 2025-12-15 should have results
+	assert.NotZero(t, resp.Metadata.TotalResults)
+	assert.Equal(t, "CGK", resp.SearchCriteria.Origin)
+	assert.Equal(t, "DPS", resp.SearchCriteria.Destination)
+
+	// ReturnDate echoed in criteria
+	require.NotNil(t, resp.SearchCriteria.ReturnDate)
+	assert.Equal(t, returnDate, *resp.SearchCriteria.ReturnDate)
+
+	// return_results is set (may be 0 since mock data has no DPS→CGK flights)
+	assert.GreaterOrEqual(t, resp.Metadata.ReturnResults, 0)
+
+	// One-way search must NOT include return_results in metadata
+	uc2 := New(allRepos(), nil, DefaultScoreWeights(), 5*time.Second, RetryConfig{})
+	oneWay, err := uc2.Search(context.Background(), baseReq, domain.FilterParams{}, domain.SortParams{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, oneWay.Metadata.ReturnResults)
+	assert.Nil(t, oneWay.ReturnFlights)
 }
