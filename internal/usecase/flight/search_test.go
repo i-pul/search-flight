@@ -3,6 +3,7 @@ package flight
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,10 +72,33 @@ func TestFlightSearchUsecase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			uc := New(allRepos(), DefaultScoreWeights())
+			uc := New(allRepos(), DefaultScoreWeights(), 5*time.Second)
 			resp, err := uc.Search(context.Background(), baseReq, tc.filter, tc.sort)
 			require.NoError(t, err)
 			tc.check(t, resp)
 		})
 	}
+}
+
+// slowRepo is a repository that blocks until its context is cancelled.
+type slowRepo struct{}
+
+func (s *slowRepo) Name() string { return "SlowProvider" }
+func (s *slowRepo) Search(ctx context.Context, _ domain.SearchRequest) ([]domain.Flight, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestFlightSearchUsecase_Timeout(t *testing.T) {
+	repos := []flightrepo.Repository{
+		garuda.New(),  // fast provider
+		&slowRepo{},   // never responds — gets killed by timeout
+	}
+	uc := New(repos, DefaultScoreWeights(), 600*time.Millisecond)
+
+	resp, err := uc.Search(context.Background(), baseReq, domain.FilterParams{}, domain.SortParams{})
+	require.NoError(t, err) // timeout is non-fatal; we get partial results
+	assert.Equal(t, 2, resp.Metadata.ProvidersQueried)
+	assert.Equal(t, 1, resp.Metadata.ProvidersFailed)   // slow repo timed out
+	assert.Equal(t, 1, resp.Metadata.ProvidersSucceeded) // garuda returned
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/fasthttp/router"
 	"github.com/i-pul/search-flight/internal/config"
@@ -37,7 +38,7 @@ func main() {
 		Price:    cfg.BestValueWeightPrice,
 		Duration: cfg.BestValueWeightDuration,
 		Stops:    cfg.BestValueWeightStops,
-	})
+	}, time.Duration(cfg.ProviderTimeoutMs)*time.Millisecond)
 	h := flighth.New(uc)
 
 	r := router.New()

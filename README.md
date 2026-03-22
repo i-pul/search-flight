@@ -52,6 +52,7 @@ Defined in `.env` (copy from `.env.example`). All variables are optional — def
 | Variable | Default | Description |
 |---|---|---|
 | `ADDR` | `:8080` | TCP address the server listens on |
+| `PROVIDER_TIMEOUT_MS` | `2000` | Max milliseconds to wait for all provider responses |
 | `BEST_VALUE_WEIGHT_PRICE` | `0.50` | Price factor weight for best-value scoring |
 | `BEST_VALUE_WEIGHT_DURATION` | `0.30` | Duration factor weight for best-value scoring |
 | `BEST_VALUE_WEIGHT_STOPS` | `0.20` | Stops factor weight for best-value scoring |

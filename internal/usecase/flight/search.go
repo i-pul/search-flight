@@ -17,10 +17,11 @@ type FlightUsecase interface {
 type FlightSearchUsecase struct {
 	repos   []flightrepo.Repository
 	weights ScoreWeights
+	timeout time.Duration
 }
 
-func New(repos []flightrepo.Repository, weights ScoreWeights) *FlightSearchUsecase {
-	return &FlightSearchUsecase{repos: repos, weights: weights}
+func New(repos []flightrepo.Repository, weights ScoreWeights, timeout time.Duration) *FlightSearchUsecase {
+	return &FlightSearchUsecase{repos: repos, weights: weights, timeout: timeout}
 }
 
 func (u *FlightSearchUsecase) Search(
@@ -40,11 +41,14 @@ func (u *FlightSearchUsecase) Search(
 
 	results := make([]result, len(u.repos))
 
-	eg, ctx := errgroup.WithContext(ctx)
+	tctx, cancel := context.WithTimeout(ctx, u.timeout)
+	defer cancel()
+
+	eg, egCtx := errgroup.WithContext(tctx)
 	for i, r := range u.repos {
 		i, r := i, r
 		eg.Go(func() error {
-			flights, err := r.Search(ctx, req)
+			flights, err := r.Search(egCtx, req)
 			results[i] = result{flights: flights, err: err}
 			return nil
 		})
